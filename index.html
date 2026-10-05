@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ro">
+<head>
+<meta charset="utf-8">
+<title>AR Desen</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+:root{--bg:#111;--fg:#fff;--bar:rgba(20,20,20,.8);--ac:#4f9cff;box-sizing:border-box}
+html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;overflow:hidden;touch-action:none}
+video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover}
+#img{position:fixed;left:0;top:0;transform-origin:0 0;max-width:none;user-select:none;-webkit-user-drag:none;display:none;pointer-events:none}
+#bar{position:fixed;left:0;right:0;bottom:0;background:var(--bar);padding:10px 12px calc(10px + env(safe-area-inset-bottom,0px));display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center}
+button,label.b{background:#2a2a2a;color:var(--fg);border:1px solid #444;border-radius:10px;padding:10px 12px;font-size:14px}
+button.on{background:var(--ac);border-color:var(--ac)}
+input[type=range]{flex:1;min-width:120px}
+#msg{position:fixed;top:calc(12px + env(safe-area-inset-top,0px));left:12px;right:12px;text-align:center;background:var(--bar);padding:10px;border-radius:10px;font-size:14px}
+</style>
+</head>
+<body>
+<video id="v" autoplay playsinline muted></video>
+<img id="img" alt="">
+<div id="msg">Se încarcă motorul de urmărire (OpenCV)…</div>
+<div id="bar">
+  <label class="b">📷 Imagine<input id="file" type="file" accept="image/*" hidden></label>
+  <button id="lock">🔓 Blochează</button>
+  <button id="flip">↔ Oglindă</button>
+  <button id="bw">Contrast</button>
+  <button id="cam">🔄 Cameră</button>
+  <input id="op" type="range" min="0.1" max="1" step="0.05" value="0.5" aria-label="Transparență">
+</div>
+<script>
+const $=id=>document.getElementById(id),v=$('v'),img=$('img'),msg=$('msg');
+let st={x:innerWidth/2,y:innerHeight/2,s:1,r:0,f:1,locked:false,bw:false},facing='environment',stream;
+let cvOK=false,trk=null,gray,prev,crit;
+const PW=320,pc=document.createElement('canvas'),pctx=pc.getContext('2d',{willReadFrequently:true});
+
+/* ---------- matrici 3x3 (row-major) ---------- */
+const mul=(a,b)=>{const r=[];for(let i=0;i<3;i++)for(let j=0;j<3;j++)r.push(a[i*3]*b[j]+a[i*3+1]*b[3+j]+a[i*3+2]*b[6+j]);return r;};
+const inv=m=>{const[a,b,c,d,e,f,g,h,i]=m,A=e*i-f*h,B=f*g-d*i,C=d*h-e*g,D=a*A+b*B+c*C;
+  return[A,c*h-b*i,b*f-c*e,B,a*i-c*g,c*d-a*f,C,b*g-a*h,a*e-b*d].map(x=>x/D);};
+const ap=(m,x,y)=>{const w=m[6]*x+m[7]*y+m[8];return[(m[0]*x+m[1]*y+m[2])/w,(m[3]*x+m[4]*y+m[5])/w];};
+function T0now(){
+  const w=img.offsetWidth,h=img.offsetHeight,c=Math.cos(st.r),s=Math.sin(st.r),a=st.s*st.f,b=st.s;
+  const m=[c*a,-s*b,0,s*a,c*b,0,0,0,1];
+  m[2]=st.x-(m[0]*w/2+m[1]*h/2);m[5]=st.y-(m[3]*w/2+m[4]*h/2);return m;
+}
+function setM(M){
+  img.style.transform=`matrix3d(${M[0]},${M[3]},0,${M[6]},${M[1]},${M[4]},0,${M[7]},0,0,1,0,${M[2]},${M[5]},0,${M[8]})`;
+  img.style.filter=st.bw?'grayscale(1) contrast(2.5)':'none';
+}
+const apply=()=>setM(T0now());
+
+/* ---------- cameră ---------- */
+async function startCam(){
+  try{
+    if(stream)stream.getTracks().forEach(t=>t.stop());
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:facing},audio:false});
+    v.srcObject=stream;
+  }catch(e){msg.textContent='Camera nu poate fi accesată. Permite camera în browser (are nevoie de HTTPS).';}
+}
+startCam();
+$('cam').onclick=()=>{unlock();facing=facing==='environment'?'user':'environment';startCam();};
+
+/* ---------- UI ---------- */
+$('file').onchange=e=>{
+  const f=e.target.files[0];if(!f)return;
+  img.onload=()=>{
+    const k=Math.min(innerWidth*.8/img.naturalWidth,innerHeight*.6/img.naturalHeight);
+    img.style.width=img.naturalWidth*k+'px';
+    st.x=innerWidth/2;st.y=innerHeight/2;st.s=1;st.r=0;
+    img.style.display='block';apply();
+    msg.textContent='Poziționează imaginea pe hârtie, apoi apasă Blochează.';
+  };
+  img.src=URL.createObjectURL(f);
+};
+img.style.opacity=.5;
+$('op').oninput=e=>img.style.opacity=e.target.value;
+$('flip').onclick=()=>{st.f*=-1;if(!st.locked)apply();else if(trk)trk.T0=mulFlip();};
+function mulFlip(){ // oglindire în jurul centrului imaginii, în coordonatele blocate
+  const w=img.offsetWidth,h=img.offsetHeight;
+  return mul(trk.T0,[-1,0,w,0,1,0,0,0,1]);
+}
+$('bw').onclick=()=>{st.bw=!st.bw;$('bw').classList.toggle('on',st.bw);if(!trk)apply();};
+const lockBtn=$('lock');
+lockBtn.onclick=()=>st.locked?unlock():lockOn();
+function unlock(){
+  st.locked=false;trk=null;lockBtn.textContent='🔓 Blochează';lockBtn.classList.remove('on');
+}
+
+/* ---------- urmărire ---------- */
+function grab(){
+  pctx.drawImage(v,0,0,pc.width,pc.height);
+  const m=cv.imread(pc);cv.cvtColor(m,gray,cv.COLOR_RGBA2GRAY);m.delete();
+}
+function detect(n){
+  const c=new cv.Mat();cv.goodFeaturesToTrack(gray,c,n,0.01,7);
+  const a=Array.from(c.data32F);c.delete();return a;
+}
+function lockOn(){
+  if(img.style.display!=='block'){msg.textContent='Alege mai întâi o imagine.';return;}
+  st.locked=true;lockBtn.textContent='🔒 Blocat';lockBtn.classList.add('on');
+  if(!cvOK||!v.videoWidth){msg.textContent='Blocat static (urmărirea nu e încă gata).';return;}
+  pc.width=PW;pc.height=Math.round(PW*v.videoHeight/v.videoWidth);
+  grab();gray.copyTo(prev);
+  const q=PW/v.videoWidth,k=Math.max(innerWidth/v.videoWidth,innerHeight/v.videoHeight);
+  const ox=(innerWidth-v.videoWidth*k)/2,oy=(innerHeight-v.videoHeight*k)/2;
+  const SP=[q/k,0,-ox*q/k,0,q/k,-oy*q/k,0,0,1];
+  const pts=detect(200);
+  if(pts.length<16){msg.textContent='Prea puține detalii în cadru. Pune lângă hârtie obiecte/text sau desenează câteva semne.';}
+  trk={T0:T0now(),SP,SPi:inv(SP),ref:pts.slice(),cur:pts.slice(),H:[1,0,0,0,1,0,0,0,1],lost:false};
+}
+function step(){
+  requestAnimationFrame(step);
+  if(!trk||!st.locked||trk.lost||v.readyState<2)return;
+  let p0,p1,sM,eM,A,B,Hm;
+  try{
+    grab();
+    const n=trk.cur.length/2;
+    if(n<8){trk.lost=true;msg.style.display='block';msg.textContent='Urmărire pierdută. Apasă Blochează de două ori pentru a relua.';return;}
+    p0=cv.matFromArray(n,1,cv.CV_32FC2,trk.cur);p1=new cv.Mat();sM=new cv.Mat();eM=new cv.Mat();
+    cv.calcOpticalFlowPyrLK(prev,gray,p0,p1,sM,eM,new cv.Size(21,21),3,crit);
+    const d=p1.data32F,s=sM.data,nc=[],nr=[];
+    for(let i=0;i<n;i++)if(s[i]){nc.push(d[2*i],d[2*i+1]);nr.push(trk.ref[2*i],trk.ref[2*i+1]);}
+    trk.cur=nc;trk.ref=nr;
+    const m=nc.length/2;
+    if(m>=8){
+      A=cv.matFromArray(m,1,cv.CV_32FC2,nr);B=cv.matFromArray(m,1,cv.CV_32FC2,nc);
+      Hm=cv.findHomography(A,B,cv.RANSAC,3);
+      if(Hm.rows===3)trk.H=Array.from(Hm.data64F);
+    }
+    if(m<80&&m>=8){ // completează cu puncte noi
+      const Hi=inv(trk.H),np=detect(150);
+      for(let i=0;i<np.length&&trk.cur.length<400;i+=2){
+        const x=np[i],y=np[i+1];let ok=true;
+        for(let j=0;j<trk.cur.length;j+=2)if(Math.abs(trk.cur[j]-x)<6&&Math.abs(trk.cur[j+1]-y)<6){ok=false;break;}
+        if(ok){const r=ap(Hi,x,y);trk.ref.push(r[0],r[1]);trk.cur.push(x,y);}
+      }
+    }
+    gray.copyTo(prev);
+    setM(mul(trk.SPi,mul(trk.H,mul(trk.SP,trk.T0))));
+    msg.style.display='block';msg.textContent=`Urmărire activă • ${trk.cur.length/2} puncte`;
+  }catch(e){console.error(e);}
+  finally{[p0,p1,sM,eM,A,B,Hm].forEach(x=>x&&x.delete());}
+}
+requestAnimationFrame(step);
+
+/* ---------- gesturi ---------- */
+const P=new Map();let pv=null;
+function info(){const a=[...P.values()];if(a.length<2)return null;
+  const dx=a[1].x-a[0].x,dy=a[1].y-a[0].y;
+  return{d:Math.hypot(dx,dy),a:Math.atan2(dy,dx),cx:(a[0].x+a[1].x)/2,cy:(a[0].y+a[1].y)/2};}
+document.addEventListener('pointerdown',e=>{if(e.target.closest('#bar'))return;P.set(e.pointerId,{x:e.clientX,y:e.clientY});pv=info();});
+document.addEventListener('pointermove',e=>{
+  if(!P.has(e.pointerId)||st.locked)return;
+  const o=P.get(e.pointerId),n={x:e.clientX,y:e.clientY};
+  if(P.size===1){st.x+=n.x-o.x;st.y+=n.y-o.y;P.set(e.pointerId,n);}
+  else{P.set(e.pointerId,n);const c=info();
+    if(pv&&c){st.s*=c.d/pv.d;st.r+=c.a-pv.a;st.x+=c.cx-pv.cx;st.y+=c.cy-pv.cy;}pv=c;}
+  apply();
+});
+const up=e=>{P.delete(e.pointerId);pv=info();};
+document.addEventListener('pointerup',up);document.addEventListener('pointercancel',up);
+
+/* ---------- OpenCV.js ---------- */
+const sc=document.createElement('script');
+sc.src='https://docs.opencv.org/4.x/opencv.js';sc.async=true;
+sc.onload=()=>{
+  const init=()=>{gray=new cv.Mat();prev=new cv.Mat();crit=new cv.TermCriteria(cv.TermCriteria_EPS|cv.TermCriteria_COUNT,10,0.03);
+    cvOK=true;msg.textContent='Gata. Alege o imagine, poziționeaz-o și apasă Blochează.';};
+  if(cv.getBuildInformation)init();
+  else if(cv.then)cv.then(m=>{window.cv=m;init();});
+  else cv.onRuntimeInitialized=init;
+};
+sc.onerror=()=>{msg.textContent='Nu s-a putut încărca OpenCV. Verifică internetul. Funcționează doar fără urmărire.';};
+document.body.appendChild(sc);
+</script>
+</body>
+</html>
