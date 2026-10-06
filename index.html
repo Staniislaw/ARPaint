@@ -2,18 +2,22 @@
 <html lang="ro">
 <head>
 <meta charset="utf-8">
-<title>Rubik Solver</title>
+<title>Rubik AR Solver</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <style>
 :root{--bg:#111;--fg:#fff;--bar:rgba(15,15,15,.82);--ac:#4f9cff;box-sizing:border-box}
 *{box-sizing:border-box}
 html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,sans-serif;overflow:hidden}
 video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover}
-#top{position:fixed;left:0;right:0;top:0;padding:calc(10px + env(safe-area-inset-top,0px)) 14px 10px;background:var(--bar);text-align:center}
-#ttl{font-size:18px}#sub{font-size:14px;opacity:.9;margin-top:4px}
-#grid{position:fixed;left:50%;top:48%;width:min(72vw,46vh);aspect-ratio:1;transform:translate(-50%,-50%);display:grid;grid-template:repeat(3,1fr)/repeat(3,1fr);gap:6px}
+.bar{position:fixed;left:0;right:0;background:var(--bar);text-align:center;padding:10px 14px}
+#top{top:0;padding-top:calc(10px + env(safe-area-inset-top,0px))}
+#bot,#abot{bottom:0;padding-bottom:calc(12px + env(safe-area-inset-bottom,0px))}
+#sub{font-size:14px;margin-top:4px}
+#grid,#arrows{position:fixed;left:50%;top:46%;width:min(72vw,40vh);aspect-ratio:1;transform:translate(-50%,-50%)}
+#grid{display:grid;grid-template:repeat(3,1fr)/repeat(3,1fr);gap:6px}
 #grid div{border:3px solid #fff;border-radius:8px;box-shadow:0 0 0 1px #0008}
-#bot{position:fixed;left:0;right:0;bottom:0;padding:10px 12px calc(12px + env(safe-area-inset-bottom,0px));background:var(--bar)}
+#grid div.ok{border-color:#2ecc71;background:#2ecc7133}
+#arrows{pointer-events:none;display:none}
 #th{display:flex;gap:8px;justify-content:center;margin-bottom:10px}
 .th{display:grid;grid-template:repeat(3,1fr)/repeat(3,1fr);width:42px;height:42px;gap:1px;background:#333;border:2px solid #555}
 .th.cur{border-color:var(--ac)}.th i{display:block}
@@ -24,32 +28,39 @@ button:disabled{opacity:.4}
 #panel{position:fixed;inset:0;background:var(--bg);display:none;flex-direction:column;align-items:center;padding:calc(14px + env(safe-area-inset-top,0px)) 14px 14px;gap:12px;overflow:auto}
 .net{display:grid;grid-template:repeat(9,var(--c))/repeat(12,var(--c));--c:min(7.4vw,30px);gap:2px}
 .net i{display:block;border-radius:4px;border:1px solid #0006}
-.net i.dim{opacity:.35}.net i.hl{box-shadow:0 0 0 3px #fff inset}
 #cnt{display:flex;gap:6px;flex-wrap:wrap;justify-content:center}
 #cnt b{padding:4px 9px;border-radius:10px;font-size:14px;color:#000}
-#mv{font-size:64px;font-weight:700;line-height:1}
-#ex{text-align:center;font-size:17px;max-width:420px}
 #msg{color:#ffb347;min-height:20px;text-align:center}
+#ar{display:none}
+#atop{top:0;padding-top:calc(8px + env(safe-area-inset-top,0px))}
+#amv{font-size:46px;font-weight:700;line-height:1.05}
+#aex{font-size:15px}#apg{font-size:13px;opacity:.8}
+#scene{position:fixed;right:10px;bottom:calc(84px + env(safe-area-inset-bottom,0px));width:150px;height:150px;perspective:520px;background:#0007;border-radius:14px}
+#cube{position:absolute;left:50%;top:50%;width:0;height:0;transform-style:preserve-3d;transition:transform .6s}
+.cb{position:absolute;left:0;top:0;width:34px;height:34px;margin:-17px;transform-style:preserve-3d}
+.cb u{position:absolute;inset:0;background:#000;border:1px solid #000;border-radius:3px;backface-visibility:hidden}
 </style>
 </head>
 <body>
 <video id="v" autoplay playsinline muted></video>
 <canvas id="cv" hidden></canvas>
-<div id="top"><b id="ttl"></b><div id="sub"></div></div>
-<div id="grid"></div>
-<div id="bot">
-  <div id="th"></div>
-  <div class="row"><button id="undo">↩ Înapoi</button><button id="cap" class="p">Scanează fața</button></div>
+<div id="scanui">
+  <div id="top" class="bar"><b id="ttl"></b><div id="sub"></div></div>
+  <div id="bot" class="bar"><div id="th"></div><div class="row"><button id="undo">↩ Înapoi</button><button id="cap" class="p">Scanează fața</button></div></div>
 </div>
+<div id="grid"></div>
+<svg id="arrows" viewBox="0 0 300 300"></svg>
 <div id="panel">
-  <div id="head" style="text-align:center"></div>
+  <div style="text-align:center"><b>Verifică culorile</b><div style="font-size:14px;opacity:.85">Atinge o căsuță greșită ca să-i schimbi culoarea.</div></div>
   <div class="net" id="net"></div>
   <div id="cnt"></div>
-  <div id="mv"></div>
-  <div id="ex"></div>
   <div id="msg"></div>
-  <div class="row" id="rv"><button id="redo">Scanează din nou</button><button id="go" class="p">Rezolvă</button></div>
-  <div class="row" id="sv" style="display:none"><button id="prev">◀</button><button id="next" class="p">Următorul ▶</button><button id="back">Editează</button></div>
+  <div class="row"><button id="redo">Scanează din nou</button><button id="go" class="p">Rezolvă</button></div>
+</div>
+<div id="ar">
+  <div id="atop" class="bar"><div id="amv"></div><div id="aex"></div><div id="apg"></div></div>
+  <div id="scene"><div id="cube"></div></div>
+  <div id="abot" class="bar"><div class="row"><button id="aprev">◀</button><button id="anext" class="p">Următorul ▶</button><button id="aedit">Editează</button></div></div>
 </div>
 <script>(function() {
   // Centers
@@ -2100,13 +2111,39 @@ const TXT=[
  'Încă o rotire în același sens: fața PORTOCALIE spre cameră, alb sus.',
  'Revino la verde în față, apoi înclină cubul spre tine ca fața ALBĂ să privească camera.',
  'Revino la verde în față, apoi înclină cubul în sens opus ca fața GALBENĂ să privească camera.'];
-let step=0,raw={},ready=false,state={},sol=[],states=[],idx=0;
+let step=0,raw={},ready=false,state={},sol=[],states=[],idx=0,REF=[],arOn=false,hold=0,tok=0;
+
+//<FIDX>
+function fidx(f,x,y,z){
+  switch(f){
+    case 'U':return (z+1)*3+(x+1);
+    case 'R':return 9+(1-y)*3+(1-z);
+    case 'F':return 18+(1-y)*3+(x+1);
+    case 'D':return 27+(1-z)*3+(x+1);
+    case 'L':return 36+(1-y)*3+(z+1);
+    default:return 45+(1-y)*3+(1-x);
+  }
+}
+// axa CSS, semn CSS pentru sensul orar, functia care alege stratul
+const LAYER={R:['X',1,c=>c.x==1],L:['X',-1,c=>c.x==-1],U:['Y',-1,c=>c.y==1],D:['Y',1,c=>c.y==-1],F:['Z',1,c=>c.z==1],B:['Z',-1,c=>c.z==-1]};
+//</FIDX>
 
 for(let i=0;i<9;i++)$('#grid').appendChild(document.createElement('div'));
+const cells=[...$('#grid').children];
 
+function mode(m){
+  $('#scanui').style.display=m=='scan'?'block':'none';
+  $('#grid').style.display=(m=='scan'||m=='ar')?'grid':'none';
+  $('#arrows').style.display=m=='ar'?'block':'none';
+  $('#panel').style.display=m=='panel'?'flex':'none';
+  $('#ar').style.display=m=='ar'?'block':'none';
+  arOn=m=='ar';tok++;
+  cells.forEach(c=>c.className='');
+}
 navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false})
  .then(s=>v.srcObject=s).catch(()=>{$('#sub').textContent='Camera nu poate fi accesată. Permite camera (necesită HTTPS).';});
 
+/* ---------- scanare ---------- */
 function updScan(){
   const L=ORDER[step];
   $('#ttl').textContent='Fața '+(step+1)+'/6 – centru '+NAME[L];
@@ -2125,65 +2162,59 @@ function lab(c){
   const f=t=>t>.008856?Math.cbrt(t):7.787*t+16/116;
   return[116*f(Y)-16,500*(f(X)-f(Y)),200*(f(Y)-f(Z))];
 }
-function capture(){
-  if(!v.videoWidth)return;
-  const vw=v.videoWidth,vh=v.videoHeight;cv.width=vw;cv.height=vh;
-  const x=cv.getContext('2d',{willReadFrequently:true});x.drawImage(v,0,0);
+function classify(c){
+  const q=lab(c);let b,bd=1e9;
+  REF.forEach(([l,r])=>{const d=((q[0]-r[0])*.5)**2+(q[1]-r[1])**2+(q[2]-r[2])**2;if(d<bd){bd=d;b=l;}});
+  return b;
+}
+function sample(sc){
+  const vw=v.videoWidth,vh=v.videoHeight;if(!vw)return null;
+  const w=Math.round(vw*sc),h=Math.round(vh*sc);cv.width=w;cv.height=h;
+  const x=cv.getContext('2d',{willReadFrequently:true});x.drawImage(v,0,0,w,h);
   const W=innerWidth,H=innerHeight,k=Math.max(W/vw,H/vh),ox=(W-vw*k)/2,oy=(H-vh*k)/2;
-  raw[ORDER[step]]=[...$('#grid').children].map(el=>{
-    const r=el.getBoundingClientRect(),cx=(r.left+r.width/2-ox)/k,cy=(r.top+r.height/2-oy)/k,s=Math.max(2,Math.round(r.width*.2/k));
+  return cells.map(el=>{
+    const r=el.getBoundingClientRect(),cx=(r.left+r.width/2-ox)/k*sc,cy=(r.top+r.height/2-oy)/k*sc,s=Math.max(1,Math.round(r.width*.2/k*sc));
     const d=x.getImageData(Math.round(cx-s),Math.round(cy-s),2*s,2*s).data,a=[0,0,0],n=d.length/4;
     for(let i=0;i<d.length;i+=4){a[0]+=d[i];a[1]+=d[i+1];a[2]+=d[i+2];}
     return a.map(t=>Math.round(t/n));
   });
-  step++;
-  if(step<6)updScan();else review();
 }
-$('#cap').onclick=capture;
+$('#cap').onclick=()=>{
+  const c=sample(1);if(!c)return;
+  raw[ORDER[step]]=c;step++;
+  if(step<6)updScan();else review();
+};
 $('#undo').onclick=()=>{if(step>0){step--;delete raw[ORDER[step]];updScan();}};
 
+/* ---------- verificare ---------- */
 function review(){
-  const ref=ORDER.map(L=>[L,lab(raw[L][4])]);
+  REF=ORDER.map(L=>[L,lab(raw[L][4])]);
   state={};
-  ORDER.forEach(L=>state[L]=raw[L].map((c,i)=>{
-    if(i==4)return L;
-    const q=lab(c);let b,bd=1e9;
-    ref.forEach(([l,r])=>{const d=((q[0]-r[0])*.5)**2+(q[1]-r[1])**2+(q[2]-r[2])**2;if(d<bd){bd=d;b=l;}});
-    return b;
-  }));
-  show('rv');$('#panel').style.display='flex';
-  $('#head').innerHTML='<b>Verifică culorile</b><div style="font-size:14px;opacity:.85">Atinge o căsuță greșită ca să-i schimbi culoarea.</div>';
-  $('#mv').textContent='';$('#ex').textContent='';
-  draw();
+  ORDER.forEach(L=>state[L]=raw[L].map((c,i)=>i==4?L:classify(c)));
+  mode('panel');draw();
 }
 const str=()=>FACES.split('').map(L=>state[L].join('')).join('');
 const POS={U:[3,0],L:[0,3],F:[3,3],R:[6,3],B:[9,3],D:[3,6]};
-function net(s,hl,edit){
-  const el=$('#net');el.innerHTML='';
+function draw(){
+  const s=str(),el=$('#net');el.innerHTML='';
   FACES.split('').forEach((L,fi)=>{for(let i=0;i<9;i++){
     const c=document.createElement('i');
     c.style.background=HEX[s[fi*9+i]];
     c.style.gridColumn=POS[L][0]+i%3+1;c.style.gridRow=POS[L][1]+(i/3|0)+1;
-    if(hl)c.className=hl===L?'hl':'dim';
-    if(edit&&i!=4)c.onclick=()=>{state[L][i]=FACES[(FACES.indexOf(state[L][i])+1)%6];draw();};
+    if(i!=4)c.onclick=()=>{state[L][i]=FACES[(FACES.indexOf(state[L][i])+1)%6];draw();};
     el.appendChild(c);
   }});
-}
-function draw(){
-  const s=str();net(s,null,true);
   const n={};[...s].forEach(c=>n[c]=(n[c]||0)+1);
   $('#cnt').innerHTML=FACES.split('').map(L=>'<b style="background:'+HEX[L]+';outline:'+((n[L]||0)==9?'0':'3px solid #f55')+'">'+(n[L]||0)+'/9</b>').join('');
   $('#msg').textContent='';
 }
-function show(w){$('#rv').style.display=w=='rv'?'flex':'none';$('#sv').style.display=w=='sv'?'flex':'none';}
-$('#redo').onclick=()=>{$('#panel').style.display='none';step=0;raw={};updScan();};
-$('#back').onclick=()=>{show('rv');$('#mv').textContent='';$('#ex').textContent='';$('#head').innerHTML='<b>Verifică culorile</b>';draw();};
+$('#redo').onclick=()=>{mode('scan');step=0;raw={};updScan();};
 
 $('#go').onclick=()=>{
   const s=str(),m=$('#msg');
   if(!ready){m.textContent='Solverul se pregătește, mai așteaptă câteva secunde…';return;}
   const n={};[...s].forEach(c=>n[c]=(n[c]||0)+1);
-  if(FACES.split('').some(L=>n[L]!=9)){m.textContent='Fiecare culoare trebuie să apară exact de 9 ori. Corectează căsuțele marcate.';return;}
+  if(FACES.split('').some(L=>n[L]!=9)){m.textContent='Fiecare culoare trebuie să apară exact de 9 ori.';return;}
   try{
     if(Cube.fromString(s).isSolved()){m.textContent='Cubul pare deja rezolvat.';return;}
     const r=Cube.fromString(s).solve();
@@ -2193,28 +2224,86 @@ $('#go').onclick=()=>{
     sol.forEach(x=>{c.move(x);states.push(c.asString());});
     if(!c.isSolved())throw 0;
   }catch(e){m.textContent='Configurație imposibilă – o culoare e citită greșit. Verifică și corectează.';return;}
-  idx=0;show('sv');$('#cnt').innerHTML='';
-  $('#head').innerHTML='<b>Ține cubul cu VERDE spre tine și ALB sus</b><div id="pg" style="font-size:14px;opacity:.85"></div>';
-  step_();
+  idx=0;mode('ar');render();
 };
-const FN={U:'de SUS',D:'de JOS',L:'din STÂNGA',R:'din DREAPTA',F:'din FAȚĂ',B:'din SPATE'};
-function step_(){
-  const m=sol[idx];
-  net(states[idx],m&&m[0],false);
-  $('#mv').textContent=m||'✔';
-  const how=!m?'':m[1]=="'"?'90° în sens invers acelor de ceasornic':m[1]=='2'?'180°':'90° în sensul acelor de ceasornic';
-  $('#ex').textContent=m?'Rotește fața '+FN[m[0]]+' cu '+how+' (privind direct acea față).':'Rezolvat! 🎉';
-  $('#pg').textContent=m?'Pasul '+(idx+1)+' din '+sol.length:'';
-  $('#prev').disabled=idx==0;$('#next').disabled=idx>=sol.length;
+$('#aedit').onclick=()=>{mode('panel');draw();};
+$('#anext').onclick=()=>go(1);$('#aprev').onclick=()=>go(-1);
+function go(d){const n=idx+d;if(n<0||n>sol.length)return;idx=n;hold=0;render();}
+
+/* ---------- cub 3D animat ---------- */
+const S=34,cub=[],FT={
+  F:'translateZ(17px)',B:'rotateY(180deg) translateZ(17px)',R:'rotateY(90deg) translateZ(17px)',
+  L:'rotateY(-90deg) translateZ(17px)',U:'rotateX(90deg) translateZ(17px)',D:'rotateX(-90deg) translateZ(17px)'};
+const VIEW={R:'rotateX(-28deg) rotateY(-38deg)',U:'rotateX(-28deg) rotateY(-38deg)',F:'rotateX(-28deg) rotateY(-38deg)',
+  L:'rotateX(-28deg) rotateY(38deg)',D:'rotateX(28deg) rotateY(-38deg)',B:'rotateX(-28deg) rotateY(142deg)'};
+const NRM={U:[0,1,0],D:[0,-1,0],R:[1,0,0],L:[-1,0,0],F:[0,0,1],B:[0,0,-1]};
+for(let x=-1;x<=1;x++)for(let y=-1;y<=1;y++)for(let z=-1;z<=1;z++){
+  const el=document.createElement('div');el.className='cb';const fs={};
+  FACES.split('').forEach(f=>{
+    const n=NRM[f];if(n[0]*x+n[1]*y+n[2]*z!=1)return;
+    const u=document.createElement('u');u.style.transform=FT[f];el.appendChild(u);fs[f]=u;
+  });
+  $('#cube').appendChild(el);cub.push({x,y,z,el,fs});
 }
-$('#next').onclick=()=>{if(idx<sol.length){idx++;step_();}};
-$('#prev').onclick=()=>{if(idx>0){idx--;step_();}};
+const base=c=>'translate3d('+c.x*S+'px,'+(-c.y*S)+'px,'+c.z*S+'px)';
+function place(){cub.forEach(c=>c.el.style.transform=base(c));}
+function paint(s){cub.forEach(c=>{for(const f in c.fs)c.fs[f].style.background=HEX[s[fidx(f,c.x,c.y,c.z)]];});}
+function anim(m,my,cb){
+  const L=LAYER[m[0]],dir=m[1]=="'"?-1:1,deg=m[1]=='2'?180:90,t0=performance.now(),T=deg==180?900:600;
+  (function fr(now){
+    if(my!==tok){place();return;}
+    let t=Math.min(1,(now-t0)/T);t=t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
+    const a=L[1]*dir*deg*t;
+    cub.forEach(c=>{c.el.style.transform=L[2](c)?'rotate'+L[0]+'('+a+'deg) '+base(c):base(c);});
+    if(t<1)requestAnimationFrame(fr);else{place();paint(states[idx+1]);cb();}
+  })(t0);
+}
+function hint(){
+  const my=tok,m=sol[idx];place();paint(states[idx]);
+  $('#cube').style.transform=VIEW[m?m[0]:'F'];
+  if(!m)return;
+  const run=()=>{
+    if(my!==tok)return;paint(states[idx]);
+    setTimeout(()=>{if(my===tok)anim(m,my,()=>setTimeout(run,1000));},700);
+  };
+  run();
+}
+
+/* ---------- sageti AR + pas curent ---------- */
+const FN={U:'de SUS',D:'de JOS',L:'din STÂNGA',R:'din DREAPTA',F:'din FAȚĂ',B:'din SPATE'};
+const VEC={R:[250,270,250,30],L:[50,30,50,270],U:[270,50,30,50],D:[30,250,270,250]};
+function arrow(m){
+  const defs='<defs><marker id="ah" markerWidth="2.6" markerHeight="2.6" refX="1.8" refY="1.3" orient="auto"><path d="M0 0L2.6 1.3L0 2.6z" fill="#ffd400"/></marker></defs>';
+  if(!m)return defs;
+  const f=m[0],p=m[1]=="'",d=m[1]=='2',st='stroke="#ffd400" stroke-width="14" stroke-linecap="round" fill="none" marker-end="url(#ah)"'+(d?' marker-start="url(#ah)"':'');
+  if(VEC[f]){let[a,b,c,e]=VEC[f];if(p)[a,b,c,e]=[c,e,a,b];return defs+'<path d="M'+a+' '+b+'L'+c+' '+e+'" '+st+'/>';}
+  if(f=='F')return defs+'<path d="M150 40A110 110 0 1 '+(p?0:1)+' '+(p?160:140)+' 40" '+st+'/>';
+  return defs+'<text x="150" y="160" text-anchor="middle" fill="#ffd400" font-size="30" font-weight="700">B – vezi cubul 3D</text>';
+}
+function render(){
+  const m=sol[idx];
+  $('#amv').textContent=m||'✔';
+  const how=!m?'':m[1]=="'"?'90° în sens invers acelor de ceasornic':m[1]=='2'?'180°':'90° în sensul acelor de ceasornic';
+  $('#aex').textContent=m?'Rotește fața '+FN[m[0]]+' cu '+how+'. Verde în față, alb sus.':'Rezolvat! 🎉';
+  $('#apg').textContent=m?'Pasul '+(idx+1)+' din '+sol.length+' · se avansează singur când vede mutarea':'';
+  $('#arrows').innerHTML=arrow(m);
+  $('#aprev').disabled=idx==0;$('#anext').disabled=idx>=sol.length;
+  tok++;hint();
+}
+setInterval(()=>{
+  if(!arOn||idx>=sol.length)return;
+  const c=sample(.4);if(!c)return;
+  const det=c.map(classify),a=states[idx+1].slice(18,27),b=states[idx].slice(18,27);
+  cells.forEach((el,i)=>el.className=det[i]==a[i]?'ok':'');
+  const done=a!==b&&det.every((d,i)=>d==a[i]);
+  hold=done?hold+1:0;
+  if(hold>=4){hold=0;go(1);}
+},150);
 
 updScan();
-$('#cap').disabled=false;
 setTimeout(()=>{
   $('#sub').textContent='Se pregătește solverul (câteva secunde)…';
-  setTimeout(()=>{Cube.initSolver();ready=true;if(step<6)$('#sub').textContent=TXT[step];},50);
+  setTimeout(()=>{Cube.initSolver();ready=true;if(step<6&&!arOn)$('#sub').textContent=TXT[step];},50);
 },300);
 </script>
 </body>
