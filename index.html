@@ -16,7 +16,7 @@ video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover}
 #grid,#arrows{position:fixed;left:50%;top:46%;width:min(72vw,40vh);aspect-ratio:1;transform:translate(-50%,-50%)}
 #grid{display:grid;grid-template:repeat(3,1fr)/repeat(3,1fr);gap:6px}
 #grid div{border:3px solid #fff;border-radius:8px;box-shadow:0 0 0 1px #0008}
-#grid div{transition:background .1s}#grid div.ok{border-color:#2ecc71}
+#grid div{transition:background .1s}#grid div.ok{border-color:#2ecc71}#grid div.bad{border-color:#ff5252}
 #arrows{pointer-events:none;display:none}
 #th{display:flex;gap:8px;justify-content:center;margin-bottom:10px}
 .th{display:grid;grid-template:repeat(3,1fr)/repeat(3,1fr);width:42px;height:42px;gap:1px;background:#333;border:2px solid #555}
@@ -36,7 +36,7 @@ button:disabled{opacity:.4}
 #amv{font-size:46px;font-weight:700;line-height:1.05}
 #aex{font-size:15px}#apg{font-size:13px;opacity:.8}
 #scene{position:fixed;right:10px;bottom:calc(84px + env(safe-area-inset-bottom,0px));width:150px;height:150px;perspective:520px;background:#0007;border-radius:14px}
-#cube{position:absolute;left:50%;top:50%;width:0;height:0;transform-style:preserve-3d;transition:transform .6s}
+#scene{touch-action:none}#cube{position:absolute;left:50%;top:50%;width:0;height:0;transform-style:preserve-3d;transition:transform .6s}
 .cb{position:absolute;left:0;top:0;width:34px;height:34px;margin:-17px;transform-style:preserve-3d}
 .cb u{position:absolute;inset:0;background:#000;border:1px solid #000;border-radius:3px;backface-visibility:hidden}
 </style>
@@ -58,9 +58,9 @@ button:disabled{opacity:.4}
   <div class="row"><button id="redo">Scanează din nou</button><button id="go" class="p">Rezolvă</button></div>
 </div>
 <div id="ar">
-  <div id="atop" class="bar"><div id="amv"></div><div id="aex"></div><div id="apg"></div></div>
+  <div id="atop" class="bar"><div id="amv"></div><div id="aex"></div><div id="apg"></div><div id="ast" style="font-size:14px;color:#ffd400;min-height:18px"></div></div>
   <div id="scene"><div id="cube"></div></div>
-  <div id="abot" class="bar"><div class="row"><button id="aprev">◀</button><button id="anext" class="p">Următorul ▶</button><button id="aedit">Editează</button></div></div>
+  <div id="abot" class="bar"><div class="row"><button id="aprev">◀</button><button id="apause">⏸ Pauză</button><button id="anext" class="p">Următorul ▶</button><button id="aedit">Editează</button></div></div>
 </div>
 <script>(function() {
   // Centers
@@ -2128,6 +2128,72 @@ function fidx(f,x,y,z){
 const LAYER={R:['X',1,c=>c.x==1],L:['X',-1,c=>c.x==-1],U:['Y',-1,c=>c.y==1],D:['Y',1,c=>c.y==-1],F:['Z',1,c=>c.z==1],B:['Z',-1,c=>c.z==-1]};
 //</FIDX>
 
+//<TRACK>
+const NRM={U:[0,1,0],D:[0,-1,0],R:[1,0,0],L:[-1,0,0],F:[0,0,1],B:[0,0,-1]};
+const OPP={U:'D',D:'U',R:'L',L:'R',F:'B',B:'F'};
+const cross=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+const letterOf=v=>'URFDLB'.split('').find(k=>NRM[k][0]==v[0]&&NRM[k][1]==v[1]&&NRM[k][2]==v[2]);
+const ORIS=[];   // cele 24 de orientari: fata din fata (f) si fata de sus (u), in culorile centrelor
+for(const f of 'URFDLB')for(const u of 'URFDLB'){const a=NRM[f],b=NRM[u];if(a[0]*b[0]+a[1]*b[1]+a[2]*b[2]==0)ORIS.push({f,u});}
+function rightOf(o){const n=NRM[o.f];return letterOf(cross([-n[0],-n[1],-n[2]],NRM[o.u]));}
+// cele 9 culori pe care le vede camera, in ordinea citirii (stanga-dreapta, sus-jos)
+function viewFace(s,o){
+  const n=NRM[o.f],u=NRM[o.u],r=NRM[rightOf(o)],out=[];
+  for(let i=0;i<3;i++)for(let j=0;j<3;j++){
+    const p=[0,1,2].map(k=>n[k]+u[k]*(1-i)+r[k]*(j-1));
+    out.push(s[fidx(o.f,p[0],p[1],p[2])]);
+  }
+  return out.join('');
+}
+const MOVES=[];for(const f of 'URFDLB')for(const x of ['',"'",'2'])MOVES.push(f+x);
+const inv=m=>m[0]+(m[1]=="'"?'':m[1]=='2'?'2':"'");
+// ipoteze: nimic facut / mutarea corecta / orice alta mutare (gresita)
+function hyps(sb,sa,exp){
+  const h=[{k:'before',s:sb},{k:'after',s:sa}];
+  for(const m of MOVES){if(m===exp)continue;const c=Cube.fromString(sb);c.move(m);h.push({k:'wrong:'+m,s:c.asString()});}
+  return h;
+}
+function makeHV(sb,sa,exp){return hyps(sb,sa,exp).map(h=>({k:h.k,s:h.s,views:ORIS.map(o=>({o,v:viewFace(h.s,o)}))}));}
+function observe(det,HV){
+  let best=-1,res=[];
+  for(const h of HV)for(const w of h.views){
+    let sc=0;for(let i=0;i<9;i++)if(w.v[i]===det[i])sc++;
+    if(sc>best){best=sc;res=[{k:h.k,o:w.o}];}else if(sc===best)res.push({k:h.k,o:w.o});
+  }
+  return{score:best,labels:[...new Set(res.map(r=>r.k))],all:res};
+}
+function decide(ob,cur){
+  if(ob.score<8)return{t:'unknown'};
+  // "nimic facut" si "mutarea corecta" au prioritate fata de mutari gresite care nu se vad din aceasta fata
+  const L=ob.labels,P=L.filter(k=>k==='before'||k==='after');
+  let k;
+  if(P.length===2)return{t:'ambiguous',labels:P};
+  if(P.length===1)k=P[0];
+  else if(L.length===1)k=L[0];
+  else return{t:'ambiguous',labels:L};
+  const c=ob.all.filter(r=>r.k===k).map(r=>r.o),same=c.find(x=>x.f===cur.f&&x.u===cur.u);
+  // rotirea fetei vizibile arata ca rotirea intregului cub in jurul axei camerei: nu le pot deosebi dintr-o singura fata
+  if(k==='before'&&!same&&c.some(x=>x.f===cur.f)){
+    const w=[...new Set(ob.all.filter(r=>r.k.startsWith('wrong:')&&r.o.f===cur.f&&r.o.u===cur.u).map(r=>r.k))];
+    if(w.length)return{t:'ambiguous',labels:['before',...w]};
+  }
+  const o=same||c.find(x=>x.f===cur.f)||c[0];
+  return{t:k==='before'||k==='after'?k:'wrong',m:k.startsWith('wrong:')?k.slice(6):undefined,o};
+}
+// forma unei fete indiferent de rotirea ei in mana
+const canon=(s,f)=>ORIS.filter(x=>x.f===f).map(o=>viewFace(s,o)).sort()[0];
+function pickFace(HV,labels,pref){
+  for(const f of [pref,...'URFDLB'.split('').filter(x=>x!==pref)])
+    if(new Set(labels.map(l=>canon(HV.find(h=>h.k===l).s,f))).size>1)return f;
+  return null;
+}
+// pozitia fetei X din perspectiva celui care tine cubul in orientarea o
+function rel(X,o){
+  if(X===o.f)return'F';if(X===OPP[o.f])return'B';if(X===o.u)return'U';if(X===OPP[o.u])return'D';
+  return X===rightOf(o)?'R':'L';
+}
+//</TRACK>
+
 for(let i=0;i<9;i++)$('#grid').appendChild(document.createElement('div'));
 const cells=[...$('#grid').children];
 
@@ -2311,7 +2377,7 @@ $('#go').onclick=()=>{
     sol.forEach(x=>{c.move(x);states.push(c.asString());});
     if(!c.isSolved())throw 0;
   }catch(e){m.textContent='Configurație imposibilă – o culoare e citită greșit. Verifică și corectează.';return;}
-  idx=0;mode('ar');render();
+  idx=0;curOri={f:'F',u:'U'};fixIdx=-1;paused=false;$('#apause').textContent='⏸ Pauză';mode('ar');render();
 };
 $('#aedit').onclick=()=>{mode('panel');draw();};
 $('#anext').onclick=()=>go(1);$('#aprev').onclick=()=>go(-1);
@@ -2321,9 +2387,9 @@ function go(d){const n=idx+d;if(n<0||n>sol.length)return;idx=n;hold=0;render();}
 const S=34,cub=[],FT={
   F:'translateZ(17px)',B:'rotateY(180deg) translateZ(17px)',R:'rotateY(90deg) translateZ(17px)',
   L:'rotateY(-90deg) translateZ(17px)',U:'rotateX(90deg) translateZ(17px)',D:'rotateX(-90deg) translateZ(17px)'};
-const VIEW={R:'rotateX(-28deg) rotateY(-38deg)',U:'rotateX(-28deg) rotateY(-38deg)',F:'rotateX(-28deg) rotateY(-38deg)',
-  L:'rotateX(-28deg) rotateY(38deg)',D:'rotateX(28deg) rotateY(-38deg)',B:'rotateX(-28deg) rotateY(142deg)'};
-const NRM={U:[0,1,0],D:[0,-1,0],R:[1,0,0],L:[-1,0,0],F:[0,0,1],B:[0,0,-1]};
+const VIEW={R:[-28,-38],U:[-28,-38],F:[-28,-38],L:[-28,38],D:[28,-38],B:[-28,142]};
+let vx=-28,vy=-38;
+function setView(k){[vx,vy]=VIEW[k];$('#cube').style.transform='rotateX('+vx+'deg) rotateY('+vy+'deg)';}
 for(let x=-1;x<=1;x++)for(let y=-1;y<=1;y++)for(let z=-1;z<=1;z++){
   const el=document.createElement('div');el.className='cb';const fs={};
   FACES.split('').forEach(f=>{
@@ -2347,7 +2413,7 @@ function anim(m,my,cb){
 }
 function hint(){
   const my=tok,m=sol[idx];place();paint(states[idx]);
-  $('#cube').style.transform=VIEW[m?m[0]:'F'];
+  setView(m?m[0]:'F');
   if(!m)return;
   const run=()=>{
     if(my!==tok)return;paint(states[idx]);
@@ -2367,24 +2433,58 @@ function arrow(m){
   if(f=='F')return defs+'<path d="M150 40A110 110 0 1 '+(p?0:1)+' '+(p?160:140)+' 40" '+st+'/>';
   return defs+'<text x="150" y="160" text-anchor="middle" fill="#ffd400" font-size="30" font-weight="700">B – vezi cubul 3D</text>';
 }
-function render(){
-  const m=sol[idx];
-  $('#amv').textContent=m||'✔';
-  const how=!m?'':m[1]=="'"?'90° în sens invers acelor de ceasornic':m[1]=='2'?'180°':'90° în sensul acelor de ceasornic';
-  $('#aex').textContent=m?'Rotește fața '+FN[m[0]]+' cu '+how+'. Verde în față, alb sus.':'Rezolvat! 🎉';
-  $('#apg').textContent=m?'Pasul '+(idx+1)+' din '+sol.length+' · se avansează singur când vede mutarea':'';
-  $('#arrows').innerHTML=arrow(m);
-  $('#aprev').disabled=idx==0;$('#anext').disabled=idx>=sol.length;
-  tok++;hint();
+const FNN={F:'din față',B:'din spate',U:'de sus',D:'de jos',R:'din dreapta',L:'din stânga'};
+let HV=[],curOri={f:'F',u:'U'},trk={key:'',n:0},paused=false,fixIdx=-1;
+function renderText(){
+  const m=sol[idx];$('#amv').textContent=m||'✔';
+  if(!m){$('#aex').textContent='Rezolvat! 🎉';$('#apg').textContent='';$('#arrows').innerHTML=arrow(null);return;}
+  const vl=rel(m[0],curOri),suf=m.slice(1);
+  const how=suf=="'"?'90° în sens invers acelor de ceasornic':suf=='2'?'180°':'90° în sensul acelor de ceasornic';
+  $('#aex').textContent='Rotește fața '+NAME[m[0]]+' ('+FNN[vl]+') cu '+how+' (privind direct acea față).';
+  $('#apg').textContent=(idx===fixIdx?'Corectare · ':'')+'Pasul '+(idx+1)+' din '+sol.length;
+  $('#arrows').innerHTML=arrow(vl+suf);
 }
+function setOri(o){if(o&&(curOri.f!==o.f||curOri.u!==o.u)){curOri=o;renderText();}}
+function render(){
+  HV=sol[idx]?makeHV(states[idx],states[idx+1],sol[idx]):[];
+  trk={key:'',n:0};renderText();$('#ast').textContent='';
+  $('#aprev').disabled=idx==0;$('#anext').disabled=idx>=sol.length;
+  tok++;if(!paused)hint();
+}
+$('#apause').onclick=()=>{
+  paused=!paused;$('#apause').textContent=paused?'▶ Reia':'⏸ Pauză';
+  $('#ast').textContent=paused?'Pauză – recunoașterea automată e oprită':'';
+  tok++;if(!paused)hint();
+};
+// rotire manuala a modelului 3D
+{let d=false,px=0,py=0;const sc=$('#scene');
+ sc.addEventListener('pointerdown',e=>{d=true;px=e.clientX;py=e.clientY;$('#cube').style.transition='none';sc.setPointerCapture(e.pointerId);});
+ sc.addEventListener('pointermove',e=>{if(!d)return;vy+=(e.clientX-px)*.6;vx-=(e.clientY-py)*.6;px=e.clientX;py=e.clientY;$('#cube').style.transform='rotateX('+vx+'deg) rotateY('+vy+'deg)';});
+ const end=()=>{d=false;$('#cube').style.transition='';};sc.addEventListener('pointerup',end);sc.addEventListener('pointercancel',end);}
+
+// recunoasterea mutarilor fizice
 setInterval(()=>{
-  if(!arOn||idx>=sol.length)return;
+  if(!arOn||idx>=sol.length||paused)return;
   const sm=sample(.4);if(!sm)return;
-  const det=sm.cols.map(classify),a=states[idx+1].slice(18,27),b=states[idx].slice(18,27);
-  cells.forEach((el,i)=>el.className=det[i]==a[i]?'ok':'');
-  const done=a!==b&&det.every((d,i)=>d==a[i]);
-  hold=done?hold+1:0;
-  if(hold>=4){hold=0;go(1);}
+  const res=sm.cols.map(cls),det=res.map(r=>r.l).join(''),sure=res.filter(r=>r.conf>.25).length>=7;
+  cells.forEach((el,i)=>el.style.background=HEX[det[i]]+'66');
+  const ob=observe(det,HV),d=sure?decide(ob,curOri):{t:'unknown'};
+  const key=d.t+(d.m||'')+(d.labels||[]).join();
+  if(key===trk.key)trk.n++;else{trk.key=key;trk.n=1;}
+  cells.forEach(el=>el.className=d.t=='before'||d.t=='after'?'ok':d.t=='wrong'?'bad':'');
+  const st=$('#ast');
+  if(d.t==='before'&&trk.n>=3){setOri(d.o);st.textContent='Aștept mutarea…';}
+  else if(d.t==='after'&&trk.n>=5){setOri(d.o);st.textContent='✔ Mutare recunoscută';go(1);}
+  else if(d.t==='wrong'&&trk.n>=8&&ob.score===9){
+    const h=HV.find(x=>x.k==='wrong:'+d.m);
+    sol.splice(idx,0,inv(d.m));states.splice(idx,0,h.s);fixIdx=idx;
+    render();$('#ast').textContent='Mutare greșită ('+d.m+'). Anulează-o cu '+inv(d.m);
+  }
+  else if(d.t==='ambiguous'&&trk.n>=10){
+    const X=pickFace(HV,d.labels,sol[idx][0]);
+    st.textContent=X?'Arată camerei fața '+NAME[X]+' ca să confirm mutarea':'Nu pot confirma din această poziție – apasă Următorul';
+  }
+  else if(d.t==='unknown'&&trk.n>=15)st.textContent='Nu recunosc fața – centrează cubul în grilă, fără mână în cadru';
 },150);
 
 updScan();
