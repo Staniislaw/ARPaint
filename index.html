@@ -16,7 +16,7 @@ video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover}
 #grid,#arrows{position:fixed;left:50%;top:46%;width:min(72vw,40vh);aspect-ratio:1;transform:translate(-50%,-50%)}
 #grid{display:grid;grid-template:repeat(3,1fr)/repeat(3,1fr);gap:6px}
 #grid div{border:3px solid #fff;border-radius:8px;box-shadow:0 0 0 1px #0008}
-#grid div.ok{border-color:#2ecc71;background:#2ecc7133}
+#grid div{transition:background .1s}#grid div.ok{border-color:#2ecc71}
 #arrows{pointer-events:none;display:none}
 #th{display:flex;gap:8px;justify-content:center;margin-bottom:10px}
 .th{display:grid;grid-template:repeat(3,1fr)/repeat(3,1fr);width:42px;height:42px;gap:1px;background:#333;border:2px solid #555}
@@ -45,13 +45,13 @@ button:disabled{opacity:.4}
 <video id="v" autoplay playsinline muted></video>
 <canvas id="cv" hidden></canvas>
 <div id="scanui">
-  <div id="top" class="bar"><b id="ttl"></b><div id="sub"></div></div>
-  <div id="bot" class="bar"><div id="th"></div><div class="row"><button id="undo">↩ Înapoi</button><button id="cap" class="p">Scanează fața</button></div></div>
+  <div id="top" class="bar"><b id="ttl"></b><div id="sub"></div><div id="st" style="font-size:13px;color:#ffd400;margin-top:3px"></div></div>
+  <div id="bot" class="bar"><div id="th"></div><div class="row"><button id="undo">↩ Înapoi</button><button id="cap" class="p">Scanează manual</button></div></div>
 </div>
 <div id="grid"></div>
 <svg id="arrows" viewBox="0 0 300 300"></svg>
 <div id="panel">
-  <div style="text-align:center"><b>Verifică culorile</b><div style="font-size:14px;opacity:.85">Atinge o căsuță greșită ca să-i schimbi culoarea.</div></div>
+  <div style="text-align:center"><b>Verifică culorile</b><div style="font-size:14px;opacity:.85">Chenarul portocaliu = culoare incertă. Atinge o căsuță ca să o schimbi.</div></div>
   <div class="net" id="net"></div>
   <div id="cnt"></div>
   <div id="msg"></div>
@@ -2111,7 +2111,7 @@ const TXT=[
  'Încă o rotire în același sens: fața PORTOCALIE spre cameră, alb sus.',
  'Revino la verde în față, apoi înclină cubul spre tine ca fața ALBĂ să privească camera.',
  'Revino la verde în față, apoi înclină cubul în sens opus ca fața GALBENĂ să privească camera.'];
-let step=0,raw={},ready=false,state={},sol=[],states=[],idx=0,REF=[],arOn=false,hold=0,tok=0;
+let step=0,raw={},ready=false,state={},FLAG={},sol=[],states=[],idx=0,REF=[],arOn=false,hold=0,tok=0,cur='scan',stable=0,lastSig='',cool=0;
 
 //<FIDX>
 function fidx(f,x,y,z){
@@ -2137,13 +2137,14 @@ function mode(m){
   $('#arrows').style.display=m=='ar'?'block':'none';
   $('#panel').style.display=m=='panel'?'flex':'none';
   $('#ar').style.display=m=='ar'?'block':'none';
-  arOn=m=='ar';tok++;
-  cells.forEach(c=>c.className='');
+  arOn=m=='ar';tok++;cur=m;
+  cells.forEach(c=>{c.className='';c.style.background='';});
 }
 navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}},audio:false})
  .then(s=>v.srcObject=s).catch(()=>{$('#sub').textContent='Camera nu poate fi accesată. Permite camera (necesită HTTPS).';});
 
-/* ---------- scanare ---------- */
+/* ---------- scanare automata ---------- */
+const DEF={U:[235,235,235],R:[185,35,45],F:[30,150,70],D:[235,205,40],L:[240,120,30],B:[30,80,190]};
 function updScan(){
   const L=ORDER[step];
   $('#ttl').textContent='Fața '+(step+1)+'/6 – centru '+NAME[L];
@@ -2156,41 +2157,125 @@ function updScan(){
   });
   $('#undo').disabled=step==0;
 }
+//<COLOR>
 function lab(c){
   let[r,g,b]=c.map(x=>{x/=255;return x>.04045?Math.pow((x+.055)/1.055,2.4):x/12.92});
   const X=(r*.4124+g*.3576+b*.1805)/.95047,Y=r*.2126+g*.7152+b*.0722,Z=(r*.0193+g*.1192+b*.9505)/1.08883;
   const f=t=>t>.008856?Math.cbrt(t):7.787*t+16/116;
   return[116*f(Y)-16,500*(f(X)-f(Y)),200*(f(Y)-f(Z))];
 }
-function classify(c){
-  const q=lab(c);let b,bd=1e9;
-  REF.forEach(([l,r])=>{const d=((q[0]-r[0])*.5)**2+(q[1]-r[1])**2+(q[2]-r[2])**2;if(d<bd){bd=d;b=l;}});
-  return b;
+const dist=(p,q)=>((p[0]-q[0])*.4)**2+(p[1]-q[1])**2+(p[2]-q[2])**2;
+function cls(c){
+  const q=lab(c);let b,d1=1e9,d2=1e9;
+  REF.forEach(([l,r])=>{const d=dist(q,r);if(d<d1){d2=d1;d1=d;b=l;}else if(d<d2)d2=d;});
+  return{l:b,conf:1-Math.sqrt(d1/(d2+1e-6))};
 }
+const classify=c=>cls(c).l;
+function hung(a){ // algoritmul ungar, minimizeaza costul total
+  const n=a.length,INF=1e9,u=Array(n+1).fill(0),v=Array(n+1).fill(0),p=Array(n+1).fill(0),way=Array(n+1).fill(0);
+  for(let i=1;i<=n;i++){
+    p[0]=i;let j0=0;const minv=Array(n+1).fill(INF),used=Array(n+1).fill(false);
+    do{
+      used[j0]=true;const i0=p[j0];let d=INF,j1=0;
+      for(let j=1;j<=n;j++)if(!used[j]){
+        const c=a[i0-1][j-1]-u[i0]-v[j];
+        if(c<minv[j]){minv[j]=c;way[j]=j0;}
+        if(minv[j]<d){d=minv[j];j1=j;}
+      }
+      for(let j=0;j<=n;j++)if(used[j]){u[p[j]]+=d;v[j]-=d;}else minv[j]-=d;
+      j0=j1;
+    }while(p[j0]!=0);
+    do{const j1=way[j0];p[j0]=p[j1];j0=j1;}while(j0);
+  }
+  const r=Array(n);for(let j=1;j<=n;j++)r[p[j]-1]=j-1;return r;
+}
+// raw[L] = 9 culori RGB; centrul (index 4) defineste culoarea fetei L.
+// Fiecare culoare primeste EXACT 8 autocolante (in afara de centru).
+function assign(raw){
+  const ref={};for(const L of 'URFDLB')ref[L]=lab(raw[L][4]);
+  const items=[],slots=[];
+  for(const L of 'URFDLB')for(let i=0;i<9;i++)if(i!=4)items.push({L,i,q:lab(raw[L][i])});
+  for(const L of 'URFDLB')for(let k=0;k<8;k++)slots.push(L);
+  const a=hung(items.map(it=>slots.map(s=>dist(it.q,ref[s]))));
+  const st={},fl={};
+  for(const L of 'URFDLB'){st[L]=Array(9).fill(L);fl[L]=Array(9).fill(false);}
+  items.forEach((it,k)=>{
+    const l=slots[a[k]];st[it.L][it.i]=l;
+    let b,d1=1e9,d2=1e9;
+    for(const s in ref){const d=dist(it.q,ref[s]);if(d<d1){d2=d1;d1=d;b=s;}else if(d<d2)d2=d;}
+    fl[it.L][it.i]=b!==l||1-Math.sqrt(d1/(d2+1e-6))<.3;   // alt centru mai aproape SAU alegere nesigura
+  });
+  return{st,fl};
+}
+//</COLOR>
+//<VALID>
+function valid(s){
+  try{
+    const c=Cube.fromString(s);
+    const perm=(a,n)=>{const m=Array(n).fill(0);for(const x of a){if(!(x>=0&&x<n)||m[x])return false;m[x]=1;}return true;};
+    if(!perm(c.cp,8)||!perm(c.ep,12))return false;
+    if(c.co.reduce((a,b)=>a+b,0)%3||c.eo.reduce((a,b)=>a+b,0)%2)return false;
+    const par=a=>{let p=0;for(let i=0;i<a.length;i++)for(let j=i+1;j<a.length;j++)if(a[i]>a[j])p^=1;return p;};
+    return par(c.cp)==par(c.ep);
+  }catch(e){return false;}
+}
+//</VALID>
+REF=FACES.split('').map(L=>[L,lab(DEF[L])]);
 function sample(sc){
   const vw=v.videoWidth,vh=v.videoHeight;if(!vw)return null;
   const w=Math.round(vw*sc),h=Math.round(vh*sc);cv.width=w;cv.height=h;
   const x=cv.getContext('2d',{willReadFrequently:true});x.drawImage(v,0,0,w,h);
   const W=innerWidth,H=innerHeight,k=Math.max(W/vw,H/vh),ox=(W-vw*k)/2,oy=(H-vh*k)/2;
-  return cells.map(el=>{
-    const r=el.getBoundingClientRect(),cx=(r.left+r.width/2-ox)/k*sc,cy=(r.top+r.height/2-oy)/k*sc,s=Math.max(1,Math.round(r.width*.2/k*sc));
-    const d=x.getImageData(Math.round(cx-s),Math.round(cy-s),2*s,2*s).data,a=[0,0,0],n=d.length/4;
-    for(let i=0;i<d.length;i+=4){a[0]+=d[i];a[1]+=d[i+1];a[2]+=d[i+2];}
-    return a.map(t=>Math.round(t/n));
+  const toC=(sx,sy)=>[(sx-ox)/k*sc,(sy-oy)/k*sc];
+  const rc=cells.map(el=>el.getBoundingClientRect());
+  const cols=[],sd=[],lum=[];
+  rc.forEach(r=>{
+    const[cx,cy]=toC(r.left+r.width/2,r.top+r.height/2),s=Math.max(1,Math.round(r.width*.2/k*sc));
+    const d=x.getImageData(Math.round(cx-s),Math.round(cy-s),2*s,2*s).data,n=d.length/4,a=[0,0,0];
+    let q=0,m=0;
+    for(let i=0;i<d.length;i+=4){a[0]+=d[i];a[1]+=d[i+1];a[2]+=d[i+2];const l=.3*d[i]+.59*d[i+1]+.11*d[i+2];m+=l;q+=l*l;}
+    m/=n;sd.push(Math.sqrt(Math.max(0,q/n-m*m)));lum.push(m);cols.push(a.map(t=>Math.round(t/n)));
   });
+  const xs=[(rc[0].right+rc[1].left)/2,(rc[1].right+rc[2].left)/2],ys=[(rc[0].bottom+rc[3].top)/2,(rc[3].bottom+rc[6].top)/2],gaps=[];
+  xs.forEach(gx=>ys.forEach(gy=>{
+    const[cx,cy]=toC(gx,gy),s=Math.max(1,Math.round(5/k*sc));
+    const d=x.getImageData(Math.round(cx-s),Math.round(cy-s),2*s,2*s).data;let m=0;
+    for(let i=0;i<d.length;i+=4)m+=.3*d[i]+.59*d[i+1]+.11*d[i+2];
+    gaps.push(m/(d.length/4));
+  }));
+  return{cols,sd,lum,gaps};
 }
-$('#cap').onclick=()=>{
-  const c=sample(1);if(!c)return;
-  raw[ORDER[step]]=c;step++;
-  if(step<6)updScan();else review();
-};
+function capture(cols){
+  const L=ORDER[step];
+  raw[L]=cols;
+  REF=REF.map(([l,r])=>l===L?[l,lab(cols[4])]:[l,r]);   // calibrare pe lumina reala
+  step++;stable=0;lastSig='';cool=8;
+  if(navigator.vibrate)navigator.vibrate(80);
+  if(step<6){updScan();$('#st').textContent='Fața '+NAME[L]+' scanată ✔';}else review();
+}
+$('#cap').onclick=()=>{const s=sample(1);if(s)capture(s.cols);};
 $('#undo').onclick=()=>{if(step>0){step--;delete raw[ORDER[step]];updScan();}};
+setInterval(()=>{
+  if(cur!=='scan'||step>=6)return;
+  if(cool>0){cool--;return;}
+  const s=sample(.4);if(!s)return;
+  const res=s.cols.map(cls),le=res.map(r=>r.l),exp=ORDER[step],st=$('#st');
+  cells.forEach((el,i)=>{el.style.background=HEX[le[i]]+'99';el.className=res[i].conf>.3?'ok':'';});
+  const avg=s.lum.reduce((a,b)=>a+b,0)/9;
+  const uniform=s.sd.filter(x=>x<28).length>=8,dark=s.gaps.filter(g=>g<.6*avg).length>=3,sure=res.filter(r=>r.conf>.3).length>=7;
+  let good=false;
+  if(!uniform||!dark)st.textContent='Aliniază cubul: pătrățelele în grilă, fața spre cameră';
+  else if(le[4]!==exp)st.textContent=raw[le[4]]?'Fața '+NAME[le[4]]+' e deja scanată. Arată fața '+NAME[exp]:'Centrul trebuie să fie '+NAME[exp]+' (văd '+NAME[le[4]]+')';
+  else if(!sure)st.textContent='Culori nesigure – evită reflexiile sau apasă „Scanează manual"';
+  else{good=true;st.textContent='Ține nemișcat…';}
+  const sig=le.join('');
+  stable=good&&sig===lastSig?stable+1:0;lastSig=sig;
+  if(stable>=6)capture(s.cols);
+},120);
 
 /* ---------- verificare ---------- */
 function review(){
-  REF=ORDER.map(L=>[L,lab(raw[L][4])]);
-  state={};
-  ORDER.forEach(L=>state[L]=raw[L].map((c,i)=>i==4?L:classify(c)));
+  const r=assign(raw);state=r.st;FLAG=r.fl;
   mode('panel');draw();
 }
 const str=()=>FACES.split('').map(L=>state[L].join('')).join('');
@@ -2201,7 +2286,8 @@ function draw(){
     const c=document.createElement('i');
     c.style.background=HEX[s[fi*9+i]];
     c.style.gridColumn=POS[L][0]+i%3+1;c.style.gridRow=POS[L][1]+(i/3|0)+1;
-    if(i!=4)c.onclick=()=>{state[L][i]=FACES[(FACES.indexOf(state[L][i])+1)%6];draw();};
+    if(FLAG[L]&&FLAG[L][i])c.style.outline='3px solid #ffb347';
+    if(i!=4)c.onclick=()=>{state[L][i]=FACES[(FACES.indexOf(state[L][i])+1)%6];if(FLAG[L])FLAG[L][i]=false;draw();};
     el.appendChild(c);
   }});
   const n={};[...s].forEach(c=>n[c]=(n[c]||0)+1);
@@ -2215,6 +2301,7 @@ $('#go').onclick=()=>{
   if(!ready){m.textContent='Solverul se pregătește, mai așteaptă câteva secunde…';return;}
   const n={};[...s].forEach(c=>n[c]=(n[c]||0)+1);
   if(FACES.split('').some(L=>n[L]!=9)){m.textContent='Fiecare culoare trebuie să apară exact de 9 ori.';return;}
+  if(!valid(s)){m.textContent='Configurație imposibilă (culori sau orientare greșite). Corectează căsuțele marcate cu portocaliu sau scanează din nou.';return;}
   try{
     if(Cube.fromString(s).isSolved()){m.textContent='Cubul pare deja rezolvat.';return;}
     const r=Cube.fromString(s).solve();
@@ -2292,8 +2379,8 @@ function render(){
 }
 setInterval(()=>{
   if(!arOn||idx>=sol.length)return;
-  const c=sample(.4);if(!c)return;
-  const det=c.map(classify),a=states[idx+1].slice(18,27),b=states[idx].slice(18,27);
+  const sm=sample(.4);if(!sm)return;
+  const det=sm.cols.map(classify),a=states[idx+1].slice(18,27),b=states[idx].slice(18,27);
   cells.forEach((el,i)=>el.className=det[i]==a[i]?'ok':'');
   const done=a!==b&&det.every((d,i)=>d==a[i]);
   hold=done?hold+1:0;
